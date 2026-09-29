@@ -35,17 +35,18 @@ st.title("📦 Qeyri-rəsmi Nisyə və Anbar Uçotu Sistemi")
 # Yan menyu
 menu = st.sidebar.radio("Bölmələr", [
     "📊 Əsas Hesabatlar (Dashboard)",
-    "🏪 Mağazalar (Müştərilər)",
-    "📦 Anbar / Məhsullar",
+    "🏪 Mağazalar və Excel İnteqrasiya",
+    "📦 Anbar / Məhsullar və Excel İnteqrasiya",
     "🚚 Nisyə Mal Çıxışı",
     "💰 Borc Ödənişi Qəbulu",
     "📜 Hərəkət Tarixçəsi (Akt Sverki)"
 ])
 
-# --- 1. ƏSAS HESABATLAR ---
+# --- 1. ƏSAS HESABATLAR (BORC VƏ MAL QALIQLARI) ---
 if menu == "📊 Əsas Hesabatlar (Dashboard)":
-    st.header("📊 Ümumi Vəziyyət")
+    st.header("📊 Ümumi Borc və Mal Qalıqları Hesabatı")
     
+    # 1. Borcların Hesablanması
     total_sales = transactions_df.groupby("store_name")["total_amount"].sum() if not transactions_df.empty else pd.Series(dtype=float)
     total_paid = payments_df.groupby("store_name")["amount"].sum() if not payments_df.empty else pd.Series(dtype=float)
     
@@ -59,49 +60,134 @@ if menu == "📊 Əsas Hesabatlar (Dashboard)":
     total_debt = stores_summary["Qalan Borc (AZN)"].sum() if not stores_summary.empty else 0
     total_stock_val = (products_df["unit_price"] * products_df["stock_qty"]).sum() if not products_df.empty else 0
     
-    col1.metric("Ümumi Alacaq Borc", f"{total_debt:.2f} AZN")
-    col2.metric("Anbardakı Mal Dəyəri", f"{total_stock_val:.2f} AZN")
-    col3.metric("Aktiv Mağaza Sayı", len(stores_df))
+    col1.metric("💰 Ümumi Alacaq Borc Qalıqları", f"{total_debt:.2f} AZN")
+    col2.metric("📦 Anbardakı Mal Dəyəri", f"{total_stock_val:.2f} AZN")
+    col3.metric("🏪 Aktiv Mağaza Sayı", len(stores_df))
     
-    st.subheader("🏪 Mağazalar üzrə Borc Siyahısı")
-    st.dataframe(stores_summary, use_container_width=True)
+    st.divider()
+    
+    # 2. Borc Qalıqları Cədvəli
+    st.subheader("🔴 Mağazaların Borc Qalıqları Siyahısı")
+    if not stores_summary.empty:
+        st.dataframe(stores_summary, use_container_width=True)
+    else:
+        st.info("Hələ heç bir mağaza qeydiyyatı yoxdur.")
 
-# --- 2. MAĞAZALAR ---
-elif menu == "🏪 Mağazalar (Müştərilər)":
-    st.header("🏪 Mağazaların Qeydiyyatı")
-    with st.form("add_store"):
-        store_name = st.text_input("Mağaza / Obyekt Adı")
-        phone = st.text_input("Telefon Nömrəsi")
-        note = st.text_area("Qeyd")
-        submit = st.form_submit_button("Əlavə Et")
+    st.divider()
+
+    # 3. Mal Qalıqları Cədvəli
+    st.subheader("📦 Anbar Mal Qalıqları Siyahısı")
+    if not products_df.empty:
+        st.dataframe(products_df[["product_name", "unit_price", "stock_qty"]].rename(columns={
+            "product_name": "Məhsulun Adı",
+            "unit_price": "Satış Qiyməti (AZN)",
+            "stock_qty": "Anbardakı Qalıq Miqdarı"
+        }), use_container_width=True)
+    else:
+        st.info("Anbarda məhsul yoxdur.")
+
+# --- 2. MAĞAZALAR VƏ EXCEL İNTEQRASİYA ---
+elif menu == "🏪 Mağazalar və Excel İnteqrasiya":
+    st.header("🏪 Mağazaların Qeydiyyatı Və Excel-dən Yükləmə")
+    
+    tab1, tab2 = st.tabs(["📝 Tək-tək Əlavə Et", "📥 Excel-dən İnteqrasiya (Toplu Yüklə)"])
+    
+    with tab1:
+        with st.form("add_store"):
+            store_name = st.text_input("Mağaza / Obyekt Adı")
+            phone = st.text_input("Telefon Nömrəsi")
+            note = st.text_area("Qeyd")
+            submit = st.form_submit_button("Əlavə Et")
+            
+            if submit and store_name:
+                new_id = len(stores_df) + 1
+                new_row = {"id": new_id, "store_name": store_name, "phone": phone, "note": note}
+                stores_df = pd.concat([stores_df, pd.DataFrame([new_row])], ignore_index=True)
+                save_data(stores_df, STORES_FILE)
+                st.success(f"'{store_name}' uğurla əlavə olundu!")
+                st.rerun()
+
+    with tab2:
+        st.subheader("Excel və ya CSV faylı ilə Mağazaları Toplu Yükləyin")
+        st.info("Faylda sütun adları bu şəkildə olmalıdır: **store_name**, **phone**, **note**")
+        uploaded_file = st.file_uploader("Excel/CSV Faylı Seçin", type=["xlsx", "csv"])
         
-        if submit and store_name:
-            new_id = len(stores_df) + 1
-            new_row = {"id": new_id, "store_name": store_name, "phone": phone, "note": note}
-            stores_df = pd.concat([stores_df, pd.DataFrame([new_row])], ignore_index=True)
-            save_data(stores_df, STORES_FILE)
-            st.success(f"'{store_name}' uğurla əlavə olundu!")
-            st.rerun()
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.endswith(".csv"):
+                    df_excel = pd.read_csv(uploaded_file)
+                else:
+                    df_excel = pd.read_excel(uploaded_file)
+                
+                st.write("Yüklənəcək məlumatlar:", df_excel.head())
+                if st.button("Sistemə İnteqrasiya Et"):
+                    for _, row in df_excel.iterrows():
+                        new_id = len(stores_df) + 1
+                        s_name = row.get("store_name", row.iloc[0])
+                        p_phone = row.get("phone", "")
+                        n_note = row.get("note", "")
+                        
+                        new_row = {"id": new_id, "store_name": s_name, "phone": str(p_phone), "note": str(n_note)}
+                        stores_df = pd.concat([stores_df, pd.DataFrame([new_row])], ignore_index=True)
+                    
+                    save_data(stores_df, STORES_FILE)
+                    st.success("Bütün mağazalar Excel-dən bazaya köçürüldü!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Fayl oxunarkən xəta baş verdi: {e}")
 
-    st.subheader("Mövcud Mağazalar")
+    st.subheader("Mövcud Mağazalar Siyahısı")
     st.dataframe(stores_df, use_container_width=True)
 
-# --- 3. ANBAR VƏ MƏHSULLAR ---
-elif menu == "📦 Anbar / Məhsullar":
-    st.header("📦 Məhsul Və Anbar Qalıqları")
-    with st.form("add_product"):
-        product_name = st.text_input("Məhsulun Adı")
-        unit_price = st.number_input("Satış Qiyməti (AZN)", min_value=0.0, step=0.1)
-        stock_qty = st.number_input("Anbardakı İlkin Miqdar", min_value=0, step=1)
-        submit = st.form_submit_button("Məhsul Əlavə Et")
+# --- 3. ANBAR / MƏHSULLAR VƏ EXCEL İNTEQRASİYA ---
+elif menu == "📦 Anbar / Məhsullar və Excel İnteqrasiya":
+    st.header("📦 Məhsullar və Excel-dən İnteqrasiya")
+    
+    tab1, tab2 = st.tabs(["📝 Tək-tək Əlavə Et", "📥 Excel-dən Malları Yüklə (İnteqrasiya)"])
+    
+    with tab1:
+        with st.form("add_product"):
+            product_name = st.text_input("Məhsulun Adı")
+            unit_price = st.number_input("Satış Qiyməti (AZN)", min_value=0.0, step=0.1)
+            stock_qty = st.number_input("Anbardakı İlkin Miqdar", min_value=0, step=1)
+            submit = st.form_submit_button("Məhsul Əlavə Et")
+            
+            if submit and product_name:
+                new_id = len(products_df) + 1
+                new_row = {"id": new_id, "product_name": product_name, "unit_price": unit_price, "stock_qty": stock_qty}
+                products_df = pd.concat([products_df, pd.DataFrame([new_row])], ignore_index=True)
+                save_data(products_df, PRODUCTS_FILE)
+                st.success(f"'{product_name}' bazaya əlavə olundu!")
+                st.rerun()
+
+    with tab2:
+        st.subheader("Excel və ya CSV faylı ilə Məhsulları Toplu Yükləyin")
+        st.info("Faylda sütun adları bu şəkildə olmalıdır: **product_name**, **unit_price**, **stock_qty**")
+        uploaded_p_file = st.file_uploader("Məhsul Excel/CSV Faylı Seçin", type=["xlsx", "csv"], key="prod_excel")
         
-        if submit and product_name:
-            new_id = len(products_df) + 1
-            new_row = {"id": new_id, "product_name": product_name, "unit_price": unit_price, "stock_qty": stock_qty}
-            products_df = pd.concat([products_df, pd.DataFrame([new_row])], ignore_index=True)
-            save_data(products_df, PRODUCTS_FILE)
-            st.success(f"'{product_name}' bazaya əlavə olundu!")
-            st.rerun()
+        if uploaded_p_file is not None:
+            try:
+                if uploaded_p_file.name.endswith(".csv"):
+                    df_prod_excel = pd.read_csv(uploaded_p_file)
+                else:
+                    df_prod_excel = pd.read_excel(uploaded_p_file)
+                
+                st.write("Yüklənəcək Məhsullar:", df_prod_excel.head())
+                if st.button("Malları Sistemə İnteqrasiya Et"):
+                    for _, row in df_prod_excel.iterrows():
+                        new_id = len(products_df) + 1
+                        p_name = row.get("product_name", row.iloc[0])
+                        u_price = row.get("unit_price", 0.0)
+                        s_qty = row.get("stock_qty", 0)
+                        
+                        new_row = {"id": new_id, "product_name": p_name, "unit_price": u_price, "stock_qty": s_qty}
+                        products_df = pd.concat([products_df, pd.DataFrame([new_row])], ignore_index=True)
+                    
+                    save_data(products_df, PRODUCTS_FILE)
+                    st.success("Bütün məhsullar Excel-dən anbara köçürüldü!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Fayl oxunarkən xəta baş verdi: {e}")
 
     st.subheader("Anbardakı Qalıqlar")
     st.dataframe(products_df, use_container_width=True)
