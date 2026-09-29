@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
+import shutil
 from datetime import datetime
 
 # Səhifə konfiqurasiyası
@@ -13,13 +14,18 @@ st.set_page_config(
 
 # Məlumat faylları
 DATA_DIR = "data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
+BACKUP_DIR = "data_backup"
+
+for directory in [DATA_DIR, BACKUP_DIR]:
+    if not os.path.exists(directory):
+        os.makedirs(directory)
 
 STORES_FILE = os.path.join(DATA_DIR, "stores.csv")
 PRODUCTS_FILE = os.path.join(DATA_DIR, "products.csv")
 TRANSACTIONS_FILE = os.path.join(DATA_DIR, "transactions.csv")
 PAYMENTS_FILE = os.path.join(DATA_DIR, "payments.csv")
+
+FILES = [STORES_FILE, PRODUCTS_FILE, TRANSACTIONS_FILE, PAYMENTS_FILE]
 
 def load_data(file_path, columns):
     if os.path.exists(file_path):
@@ -33,6 +39,26 @@ def load_data(file_path, columns):
 def save_data(df, file_path):
     df.to_csv(file_path, index=False)
 
+def create_backup():
+    for file in FILES:
+        if os.path.exists(file):
+            shutil.copy(file, os.path.join(BACKUP_DIR, os.path.basename(file)))
+
+def restore_backup():
+    has_backup = False
+    for file in FILES:
+        backup_file = os.path.join(BACKUP_DIR, os.path.basename(file))
+        if os.path.exists(backup_file):
+            shutil.copy(backup_file, file)
+            has_backup = True
+    return has_backup
+
+def reset_database():
+    create_backup() # Silmədən öncə də yedək götürürük
+    for file in FILES:
+        if os.path.exists(file):
+            os.remove(file)
+
 # Məlumatları yükləyirik
 stores_df = load_data(STORES_FILE, ["id", "store_name", "phone", "note"])
 products_df = load_data(PRODUCTS_FILE, ["id", "code_1c", "product_name", "unit_price", "our_stock_qty"])
@@ -43,13 +69,14 @@ payments_df = load_data(PAYMENTS_FILE, ["id", "date", "store_name", "amount", "n
 st.title("📦 Nisyə və Anbar Uçotu Sistemi")
 
 # Tablar
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 Dashboard",
     "📥 Excel Yüklə",
     "🚚 Mal Çıxışı",
     "💰 Pul Qəbulu",
     "📜 Hərəkət Tarixçəsi",
-    "🏪 Mağaza və Bizim Anbar"
+    "🏪 Mağaza və Bizim Anbar",
+    "⚙️ Baza İdarəsi"
 ])
 
 # ================= 1. DASHBOARD =================
@@ -70,7 +97,6 @@ with tab1:
     
     stock_col = "our_stock_qty" if "our_stock_qty" in products_df.columns else ("stock_qty" if "stock_qty" in products_df.columns else None)
     if not products_df.empty and stock_col and "unit_price" in products_df.columns:
-        # Bizim anbar dəyəri mənfiyə düşməsin deyə max(0, qty)
         valid_prices = pd.to_numeric(products_df["unit_price"], errors="coerce").fillna(0)
         valid_stocks = pd.to_numeric(products_df[stock_col], errors="coerce").fillna(0)
         our_stock_val = (valid_prices * valid_stocks).sum()
@@ -117,7 +143,6 @@ with tab2:
             df_excel = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
             st.dataframe(df_excel.head(10), use_container_width=True)
             
-            # Sütun adlarını tapmaq üçün köməkçi funksiya
             def find_col(keywords, df):
                 for col in df.columns:
                     for kw in keywords:
@@ -135,6 +160,9 @@ with tab2:
             stock_col_excel = find_col(["qalığı", "qaliq", "qalıq", "məhsul qalığı"], df_excel)
 
             if st.button("🚀 Məlumatları Bazaya Köçür", type="primary"):
+                # Yeni məlumat yükləməzdən öncə ehtiyat nüsxə götürək
+                create_backup()
+
                 # Mağazaları əlavə et
                 if store_col:
                     for s in df_excel[store_col].dropna().unique():
@@ -184,7 +212,7 @@ with tab2:
                 
                 save_data(transactions_df, TRANSACTIONS_FILE)
                 save_data(payments_df, PAYMENTS_FILE)
-                st.success("✅ Məlumatlar uğurla köçürüldü!")
+                st.success("✅ Məlumatlar uğurla köçürüldü! (Əvvəlki baza yedəkləndi)")
                 st.rerun()
         except Exception as e:
             st.error(f"Xəta baş verdi: {e}")
@@ -205,6 +233,7 @@ with tab3:
             price = st.number_input("Qiymət (AZN)", value=float(p_price))
 
         if st.button("Təhvil Ver (Nisyə Yaz)", type="primary"):
+            create_backup()
             total_amt = qty * price
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             
@@ -245,6 +274,7 @@ with tab4:
             note = st.text_input("Qeyd (Məs: Nağd)")
             
         if st.button("Ödənişi Qeyd Et", type="primary"):
+            create_backup()
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             payments_df = pd.concat([payments_df, pd.DataFrame([{
                 "id": len(payments_df)+1, "date": date_str, "store_name": selected_store_pay, "amount": amount, "note": note
@@ -278,6 +308,7 @@ with tab6:
         s_phone = st.text_input("Telefon")
         if st.button("Mağazanı Saxla"):
             if s_name:
+                create_backup()
                 stores_df = pd.concat([stores_df, pd.DataFrame([{"id": len(stores_df)+1, "store_name": s_name, "phone": s_phone, "note": ""}])], ignore_index=True)
                 save_data(stores_df, STORES_FILE)
                 st.success("Əlavə olundu!")
@@ -291,8 +322,35 @@ with tab6:
         p_qty = st.number_input("Bizim Anbardakı Sayı (Ədəd)", min_value=0)
         if st.button("Məhsulu Anbara Saxla"):
             if p_name:
+                create_backup()
                 stock_col = "our_stock_qty" if "our_stock_qty" in products_df.columns else "stock_qty"
                 products_df = pd.concat([products_df, pd.DataFrame([{"id": len(products_df)+1, "code_1c": p_code, "product_name": p_name, "unit_price": p_price, stock_col: p_qty}])], ignore_index=True)
                 save_data(products_df, PRODUCTS_FILE)
                 st.success("Məhsul anbarımıza daxil edildi!")
                 st.rerun()
+
+# ================= 7. BAZA İDARƏSİ VƏ BƏRPA =================
+with tab7:
+    st.subheader("⚙️ Məlumat Bazası İdarəetməsi")
+    st.caption("Səhv olduqda bazanı sıfırlaya və ya son ehtiyat nüsxəyə bərpa edə bilərsiniz.")
+    
+    col_reset, col_restore = st.columns(2)
+    
+    with col_reset:
+        st.error("🚨 Bazanı Sil / Sıfırla")
+        st.write("Bu düymə bütün mağaza, məhsul və əməliyyat məlumatlarını sıfırlayacaq. Sıfırlamadan öncə avtomatik ehtiyat nüsxə götürülür.")
+        confirm_reset = st.checkbox("Bazanı sıfırlamağa əminəm")
+        if st.button("❌ Bazanı Tam Sil", type="primary", disabled=not confirm_reset):
+            reset_database()
+            st.success("🗑️ Baza uğurla sıfırlandı!")
+            st.rerun()
+            
+    with col_restore:
+        st.info("🔄 Əvvəlki Versiyaya Qayıt (Bərpa Et)")
+        st.write("Sonuncu dəfə yüklənmiş və ya sıfırlanmış ehtiyat nüsxəyə geri qayıtmaq üçün bu düymədən istifadə edin.")
+        if st.button("↩️ Son Versiyaya Bərpa Et"):
+            if restore_backup():
+                st.success("✅ Məlumatlar son ehtiyat nüsxədən bərpa olundu!")
+                st.rerun()
+            else:
+                st.warning("⚠️ Bərpa etmək üçün heç bir ehtiyat nüsxə tapılmadı.")
