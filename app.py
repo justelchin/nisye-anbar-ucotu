@@ -23,7 +23,11 @@ PAYMENTS_FILE = os.path.join(DATA_DIR, "payments.csv")
 
 def load_data(file_path, columns):
     if os.path.exists(file_path):
-        return pd.read_csv(file_path)
+        df = pd.read_csv(file_path)
+        for col in columns:
+            if col not in df.columns:
+                df[col] = 0 if "qty" in col or "amount" in col or "price" in col else ""
+        return df
     return pd.DataFrame(columns=columns)
 
 def save_data(df, file_path):
@@ -52,10 +56,10 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 with tab1:
     st.subheader("📊 Ümumi Vəziyyət")
     
-    total_sales = transactions_df.groupby("store_name")["total_amount"].sum() if not transactions_df.empty else pd.Series(dtype=float)
-    total_paid = payments_df.groupby("store_name")["amount"].sum() if not payments_df.empty else pd.Series(dtype=float)
+    total_sales = transactions_df.groupby("store_name")["total_amount"].sum() if not transactions_df.empty and "total_amount" in transactions_df.columns else pd.Series(dtype=float)
+    total_paid = payments_df.groupby("store_name")["amount"].sum() if not payments_df.empty and "amount" in payments_df.columns else pd.Series(dtype=float)
     
-    stores_summary = pd.DataFrame({"store_name": stores_df["store_name"] if not stores_df.empty else []})
+    stores_summary = pd.DataFrame({"store_name": stores_df["store_name"] if not stores_df.empty and "store_name" in stores_df.columns else []})
     if not stores_summary.empty:
         stores_summary["Ümumi Mal Alışı (AZN)"] = stores_summary["store_name"].map(total_sales).fillna(0)
         stores_summary["Ödənilən (AZN)"] = stores_summary["store_name"].map(total_paid).fillna(0)
@@ -63,7 +67,12 @@ with tab1:
     
     col1, col2, col3 = st.columns(3)
     total_debt = stores_summary["Qalan Borc (AZN)"].sum() if not stores_summary.empty else 0
-    our_stock_val = (products_df["unit_price"] * products_df["our_stock_qty"]).sum() if not products_df.empty else 0
+    
+    stock_col = "our_stock_qty" if "our_stock_qty" in products_df.columns else ("stock_qty" if "stock_qty" in products_df.columns else None)
+    if not products_df.empty and stock_col and "unit_price" in products_df.columns:
+        our_stock_val = (pd.to_numeric(products_df["unit_price"], errors="coerce").fillna(0) * pd.to_numeric(products_df[stock_col], errors="coerce").fillna(0)).sum()
+    else:
+        our_stock_val = 0.0
     
     col1.metric("💰 Ümumi Alacaq Borc", f"{total_debt:.2f} AZN")
     col2.metric("🏢 Bizim Anbardakı Mal Dəyəri", f"{our_stock_val:.2f} AZN")
@@ -82,7 +91,6 @@ with tab1:
     with c2:
         st.subheader("🏪 Mağazalardakı Satılmamış Mal Qalıqları")
         if not transactions_df.empty and "store_stock_qty" in transactions_df.columns:
-            # Ən son əməliyyatdakı obyekt mal qalıqlarını göstəririk
             latest_store_stock = transactions_df[["store_name", "product_name", "store_stock_qty"]].drop_duplicates(subset=["store_name", "product_name"], keep="last")
             st.dataframe(latest_store_stock.rename(columns={
                 "store_name": "Mağaza",
@@ -112,7 +120,7 @@ with tab2:
                             stores_df = pd.concat([stores_df, pd.DataFrame([{"id": len(stores_df)+1, "store_name": s, "phone": "", "note": "Excel-dən"}])], ignore_index=True)
                     save_data(stores_df, STORES_FILE)
                 
-                # Məhsulları kataloqa əlavə et (Bizim anbar qalığı 0 olaraq başlayır)
+                # Məhsulları əlavə et
                 if "Məhsulun adı" in df_excel.columns:
                     for _, row in df_excel.iterrows():
                         p_name = row.get("Məhsulun adı")
@@ -126,13 +134,13 @@ with tab2:
                             }])], ignore_index=True)
                     save_data(products_df, PRODUCTS_FILE)
 
-                # Əməliyyatlar və Mağaza/Obyekt Mal Qalıqları
+                # Əməliyyatları əlavə et
                 for _, row in df_excel.iterrows():
                     d_val = str(row.get("Tarix", datetime.now().strftime("%Y-%m-%d")))
                     s_name, p_name = row.get("Mağaza"), row.get("Məhsulun adı")
                     qty, price, total = row.get("Miqdar", 0), row.get("Qiymət", 0), row.get("Məbləğ", 0)
                     paid = row.get("Ödənilən pul", 0)
-                    store_stock = row.get("Mal qalığı (ədəd)", 0) # Obyektdə qalan mal
+                    store_stock = row.get("Mal qalığı (ədəd)", 0)
                     
                     if not pd.isna(s_name) and not pd.isna(p_name) and qty > 0:
                         transactions_df = pd.concat([transactions_df, pd.DataFrame([{
@@ -172,7 +180,6 @@ with tab3:
             total_amt = qty * price
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             
-            # Əgər obyektin əvvəlcədən qalığı varsa, üzərinə gəlsin
             prev_store_stock = 0
             if not transactions_df.empty:
                 filtered = transactions_df[(transactions_df["store_name"] == selected_store) & (transactions_df["product_name"] == selected_product)]
@@ -188,9 +195,9 @@ with tab3:
             }])], ignore_index=True)
             save_data(transactions_df, TRANSACTIONS_FILE)
             
-            # Bizim anbarımızdan çıxılır (əgər bizim anbar uçotunu aparırsınızsa)
-            if "our_stock_qty" in products_df.columns:
-                products_df.loc[products_df["product_name"] == selected_product, "our_stock_qty"] -= qty
+            stock_col = "our_stock_qty" if "our_stock_qty" in products_df.columns else ("stock_qty" if "stock_qty" in products_df.columns else None)
+            if stock_col:
+                products_df.loc[products_df["product_name"] == selected_product, stock_col] -= qty
                 save_data(products_df, PRODUCTS_FILE)
                 
             st.success("Təhvil verildi!")
@@ -256,7 +263,8 @@ with tab6:
         p_qty = st.number_input("Bizim Anbardakı Sayı (Ədəd)", min_value=0)
         if st.button("Məhsulu Anbara Saxla"):
             if p_name:
-                products_df = pd.concat([products_df, pd.DataFrame([{"id": len(products_df)+1, "code_1c": p_code, "product_name": p_name, "unit_price": p_price, "our_stock_qty": p_qty}])], ignore_index=True)
+                stock_col = "our_stock_qty" if "our_stock_qty" in products_df.columns else "stock_qty"
+                products_df = pd.concat([products_df, pd.DataFrame([{"id": len(products_df)+1, "code_1c": p_code, "product_name": p_name, "unit_price": p_price, stock_col: p_qty}])], ignore_index=True)
                 save_data(products_df, PRODUCTS_FILE)
                 st.success("Məhsul anbarımıza daxil edildi!")
                 st.rerun()
